@@ -11,6 +11,7 @@ No Blade views, no Vite setup, no web routes, and no session-first assumptions.
 - Sanctum bearer token authentication
 - Consistent JSON response envelope
 - JSON-first exception handling for validation, auth, not-found, authorization, and rate-limit errors
+- Custom API exceptions for domain and business errors
 - Configurable API metadata in `config/api.php`
 - Lightweight local defaults: SQLite, file cache, sync queue
 - `make:api` scaffolding for controllers, services, requests, resources, tests, DTOs, models, and migrations
@@ -85,6 +86,49 @@ Error:
 
 Use `successResponse()` and `errorResponse()` from the base controller, or call `App\Http\Responses\ApiResponse` directly.
 
+## Exception Handling
+
+Larapi Core centralizes API exception rendering in `App\Exceptions\ApiExceptionHandler`.
+
+Throw custom exceptions from controllers, services, jobs, or actions and they will be converted into the standard error envelope automatically:
+
+```php
+use App\Exceptions\ConflictException;
+
+throw new ConflictException(
+    message: 'Email address is already reserved.',
+    errors: [
+        'email' => ['already_reserved'],
+    ],
+);
+```
+
+Response:
+
+```json
+{
+  "success": false,
+  "message": "Email address is already reserved.",
+  "errors": {
+    "email": ["already_reserved"]
+  },
+  "code": "CONFLICT"
+}
+```
+
+Available exceptions:
+
+```txt
+ApiException
+BadRequestException
+ConflictException
+ForbiddenException
+ResourceNotFoundException
+UnprocessableEntityException
+```
+
+Laravel validation, authentication, authorization, not-found, method-not-allowed, and rate-limit exceptions are also rendered through the same JSON contract.
+
 ## Authentication Example
 
 ```bash
@@ -141,6 +185,9 @@ app/
       Controller.php
     Middleware/ForceJsonResponse.php
     Responses/ApiResponse.php
+  Exceptions/
+    ApiExceptionHandler.php
+    ApiException.php
   Models/User.php
 config/
   api.php
