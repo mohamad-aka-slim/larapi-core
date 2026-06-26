@@ -13,6 +13,7 @@ No Blade views, no Vite setup, no web routes, and no session-first assumptions.
 - JSON-first exception handling for validation, auth, not-found, authorization, and rate-limit errors
 - Custom API exceptions for domain and business errors
 - Configurable API metadata in `config/api.php`
+- Swagger UI and OpenAPI documentation endpoints
 - Lightweight local defaults: SQLite, file cache, sync queue
 - `make:api` scaffolding for controllers, services, requests, resources, tests, DTOs, models, and migrations
 
@@ -45,6 +46,8 @@ php artisan serve
 API_NAME="${APP_NAME}"
 API_VERSION=v1
 API_RATE_LIMIT=60,1
+API_DOCS_ENABLED=true
+API_DOCS_PATH=docs
 QUEUE_CONNECTION=sync
 CACHE_STORE=file
 ```
@@ -60,6 +63,45 @@ CACHE_STORE=file
 | POST | `/api/v1/auth/login` | No | Authenticate and receive token |
 | POST | `/api/v1/auth/logout` | Bearer | Revoke current token |
 | GET | `/api/v1/auth/me` | Bearer | Get authenticated user |
+| GET | `/api/docs` | No | Swagger UI API documentation |
+| GET | `/api/docs/openapi.json` | No | OpenAPI JSON specification |
+| GET | `/api/docs/openapi.yaml` | No | OpenAPI YAML specification |
+
+## API Documentation
+
+Larapi Core ships with Swagger-ready OpenAPI 3.1 documentation for the built-in status and auth endpoints.
+
+```bash
+php artisan serve
+```
+
+Open the interactive docs at:
+
+```txt
+http://localhost:8000/api/docs
+```
+
+Generate a static specification file:
+
+```bash
+php artisan api:docs
+php artisan api:docs --format=yaml
+php artisan api:docs --output=storage/api-docs/openapi.json
+```
+
+Documentation settings live in `config/api.php`:
+
+```dotenv
+API_DOCS_ENABLED=true
+API_DOCS_PATH=docs
+API_DOCS_JSON_PATH=docs/openapi.json
+API_DOCS_YAML_PATH=docs/openapi.yaml
+API_DOCS_OUTPUT_PATH=storage/api-docs/openapi.json
+API_DOCS_DESCRIPTION="Interactive Swagger documentation for the Larapi Core API."
+API_DOCS_CONTACT_EMAIL=api@example.com
+```
+
+Add custom endpoint documentation by merging OpenAPI fragments through `api.documentation.extensions` in `config/api.php`.
 
 ## Response Envelope
 
@@ -179,9 +221,11 @@ Available flags:
 ```txt
 app/
   Console/Commands/MakeApiCommand.php
+  Console/Commands/GenerateApiDocsCommand.php
   Http/
     Controllers/
       Api/V1/AuthController.php
+      Api/DocumentationController.php
       Controller.php
     Middleware/ForceJsonResponse.php
     Responses/ApiResponse.php
@@ -189,6 +233,7 @@ app/
     ApiExceptionHandler.php
     ApiException.php
   Models/User.php
+  Support/OpenApiSpecification.php
 config/
   api.php
 routes/
