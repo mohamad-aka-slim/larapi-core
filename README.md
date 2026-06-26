@@ -100,9 +100,12 @@ API_DOCS_PATH=docs
 API_DOCS_JSON_PATH=docs/openapi.json
 API_DOCS_YAML_PATH=docs/openapi.yaml
 API_DOCS_OUTPUT_PATH=storage/api-docs/openapi.json
+API_DOCS_SERVER_URL=
 API_DOCS_DESCRIPTION="Interactive Swagger documentation for the Larapi Core API."
 API_DOCS_CONTACT_EMAIL=api@example.com
 ```
+
+By default Swagger uses a relative server URL like `/api`, so "Try it out" requests use the same host and port as the documentation page. Set `API_DOCS_SERVER_URL=https://api.example.com/api` only when you want Swagger to call a fixed external API server.
 
 Add custom endpoint documentation by merging OpenAPI fragments through `api.documentation.extensions` in `config/api.php`.
 

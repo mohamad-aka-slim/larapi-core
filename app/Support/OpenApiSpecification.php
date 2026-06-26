@@ -25,7 +25,7 @@ class OpenApiSpecification
         $prefix = trim((string) config('api.prefix', 'api'), '/');
         $version = trim((string) config('api.version', 'v1'), '/');
         $basePath = $prefix === '' ? '' : '/'.$prefix;
-        $serverUrl = rtrim((string) config('app.url', 'http://localhost'), '/').$basePath;
+        $serverUrl = rtrim((string) (config('api.documentation.server_url') ?: $basePath), '/') ?: '/';
         $resourceRoutes = $this->resourceRouteDocumentation($prefix);
 
         $specification = [

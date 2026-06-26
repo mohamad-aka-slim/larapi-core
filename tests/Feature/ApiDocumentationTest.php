@@ -14,9 +14,19 @@ class ApiDocumentationTest extends TestCase
             ->assertOk()
             ->assertJsonPath('openapi', '3.1.0')
             ->assertJsonPath('info.title', config('api.name'))
+            ->assertJsonPath('servers.0.url', '/api')
             ->assertJsonPath('paths./v1/status.get.operationId', 'getApiStatus')
             ->assertJsonPath('paths./v1/auth/register.post.operationId', 'registerUser')
             ->assertJsonPath('components.securitySchemes.sanctum.scheme', 'bearer');
+    }
+
+    public function test_openapi_server_url_can_be_configured_for_external_api_hosts(): void
+    {
+        config(['api.documentation.server_url' => 'https://api.example.com/api']);
+
+        $this->getJson('/api/docs/openapi.json')
+            ->assertOk()
+            ->assertJsonPath('servers.0.url', 'https://api.example.com/api');
     }
 
     public function test_openapi_yaml_endpoint_is_available(): void
