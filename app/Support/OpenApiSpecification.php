@@ -2,10 +2,14 @@
 
 namespace App\Support;
 
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
+use ReflectionMethod;
+use ReflectionNamedType;
+use Throwable;
 
 class OpenApiSpecification
 {
@@ -56,7 +60,9 @@ class OpenApiSpecification
                 ...$resourceRoutes['tags'],
             ],
             'paths' => array_replace_recursive($this->paths($version), $resourceRoutes['paths']),
-            'components' => $this->components(),
+            'components' => array_replace_recursive($this->components(), [
+                'schemas' => $resourceRoutes['schemas'],
+            ]),
         ];
 
         return array_replace_recursive($specification, config('api.documentation.extensions', []));
@@ -221,13 +227,15 @@ class OpenApiSpecification
     /**
      * @return array{
      *     tags: array<int, array{name: string, description: string}>,
-     *     paths: array<string, mixed>
+     *     paths: array<string, mixed>,
+     *     schemas: array<string, mixed>
      * }
      */
     private function resourceRouteDocumentation(string $apiPrefix): array
     {
         $tags = [];
         $paths = [];
+        $schemas = [];
 
         foreach (Route::getRoutes() as $route) {
             $action = $this->routeAction($route);
@@ -250,13 +258,14 @@ class OpenApiSpecification
             ];
 
             foreach ($this->httpMethods($route) as $method) {
-                $paths[$path][$method] = $this->resourceOperation($route, $method, $action, $resource, $tag);
+                $paths[$path][$method] = $this->resourceOperation($route, $method, $action, $resource, $tag, $schemas);
             }
         }
 
         return [
             'tags' => array_values($tags),
             'paths' => $paths,
+            'schemas' => $schemas,
         ];
     }
 
@@ -310,7 +319,7 @@ class OpenApiSpecification
     /**
      * @return array<string, mixed>
      */
-    private function resourceOperation(LaravelRoute $route, string $method, string $action, string $resource, string $tag): array
+    private function resourceOperation(LaravelRoute $route, string $method, string $action, string $resource, string $tag, array &$schemas): array
     {
         $operation = [
             'tags' => [$tag],
@@ -326,8 +335,7 @@ class OpenApiSpecification
                 'content' => [
                     'application/json' => [
                         'schema' => [
-                            'type' => 'object',
-                            'additionalProperties' => true,
+                            ...$this->requestBodySchema($route, $schemas),
                         ],
                     ],
                 ],
@@ -343,6 +351,293 @@ class OpenApiSpecification
         }
 
         return $operation;
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemas
+     * @return array<string, mixed>
+     */
+    private function requestBodySchema(LaravelRoute $route, array &$schemas): array
+    {
+        $requestClass = $this->formRequestClass($route);
+
+        if ($requestClass === null) {
+            return $this->genericRequestSchema();
+        }
+
+        $schemaName = class_basename($requestClass);
+
+        if (! isset($schemas[$schemaName])) {
+            $schemas[$schemaName] = $this->formRequestSchema($requestClass);
+        }
+
+        return [
+            '$ref' => "#/components/schemas/{$schemaName}",
+        ];
+    }
+
+    private function formRequestClass(LaravelRoute $route): ?string
+    {
+        $controller = $route->getAction('controller');
+
+        if (! is_string($controller) || ! str_contains($controller, '@')) {
+            return null;
+        }
+
+        [$controllerClass, $method] = explode('@', $controller, 2);
+
+        if (! class_exists($controllerClass) || ! method_exists($controllerClass, $method)) {
+            return null;
+        }
+
+        try {
+            $reflection = new ReflectionMethod($controllerClass, $method);
+        } catch (Throwable) {
+            return null;
+        }
+
+        foreach ($reflection->getParameters() as $parameter) {
+            $type = $parameter->getType();
+
+            if (! $type instanceof ReflectionNamedType || $type->isBuiltin()) {
+                continue;
+            }
+
+            $class = $type->getName();
+
+            if (is_a($class, FormRequest::class, true)) {
+                return $class;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  class-string<FormRequest>  $requestClass
+     * @return array<string, mixed>
+     */
+    private function formRequestSchema(string $requestClass): array
+    {
+        try {
+            $request = new $requestClass;
+            $request->setContainer(app());
+            $request->setRedirector(app('redirect'));
+            $rules = $request->rules();
+        } catch (Throwable) {
+            return $this->genericRequestSchema();
+        }
+
+        $required = [];
+        $properties = [];
+
+        foreach ($rules as $field => $fieldRules) {
+            if (! is_string($field) || str_contains($field, '.')) {
+                continue;
+            }
+
+            $normalizedRules = $this->normalizeRules($fieldRules);
+            $properties[$field] = $this->fieldSchema($field, $normalizedRules);
+
+            if ($this->hasRule($normalizedRules, 'required')) {
+                $required[] = $field;
+            }
+
+            if ($this->hasRule($normalizedRules, 'confirmed')) {
+                $confirmationField = "{$field}_confirmation";
+                $properties[$confirmationField] = $properties[$field];
+
+                if (in_array($field, $required, true)) {
+                    $required[] = $confirmationField;
+                }
+            }
+        }
+
+        if ($properties === []) {
+            return $this->genericRequestSchema();
+        }
+
+        $schema = [
+            'type' => 'object',
+            'properties' => $properties,
+            'additionalProperties' => false,
+        ];
+
+        if ($required !== []) {
+            $schema['required'] = array_values(array_unique($required));
+        }
+
+        return $schema;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function genericRequestSchema(): array
+    {
+        return [
+            'type' => 'object',
+            'additionalProperties' => true,
+        ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function normalizeRules(mixed $rules): array
+    {
+        if (is_string($rules)) {
+            return array_values(array_filter(explode('|', $rules)));
+        }
+
+        if (! is_array($rules)) {
+            $rules = [$rules];
+        }
+
+        return collect($rules)
+            ->flatMap(fn (mixed $rule): array => is_string($rule) ? explode('|', $rule) : [$this->ruleName($rule)])
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function ruleName(mixed $rule): string
+    {
+        if (is_object($rule)) {
+            return class_basename($rule);
+        }
+
+        return (string) $rule;
+    }
+
+    /**
+     * @param  array<int, string>  $rules
+     * @return array<string, mixed>
+     */
+    private function fieldSchema(string $field, array $rules): array
+    {
+        $type = $this->fieldType($rules);
+        $schema = [
+            'type' => $this->hasRule($rules, 'nullable') ? [$type, 'null'] : $type,
+        ];
+
+        if ($type === 'array') {
+            $schema['items'] = [
+                'type' => 'object',
+                'additionalProperties' => true,
+            ];
+        }
+
+        if ($this->hasAnyRule($rules, ['email', 'url', 'uuid'])) {
+            $schema['format'] = $this->firstMatchingRule($rules, ['email', 'url', 'uuid']);
+        }
+
+        if ($this->hasAnyRule($rules, ['date', 'date_format'])) {
+            $schema['type'] = $this->hasRule($rules, 'nullable') ? ['string', 'null'] : 'string';
+            $schema['format'] = 'date-time';
+        }
+
+        if (str_contains($field, 'password')) {
+            $schema['format'] = 'password';
+        }
+
+        foreach ($rules as $rule) {
+            [$name, $parameters] = $this->parseRule($rule);
+
+            if ($name === 'min' && isset($parameters[0])) {
+                $schema[$type === 'string' ? 'minLength' : 'minimum'] = (int) $parameters[0];
+            }
+
+            if ($name === 'max' && isset($parameters[0])) {
+                $schema[$type === 'string' ? 'maxLength' : 'maximum'] = (int) $parameters[0];
+            }
+
+            if ($name === 'size' && isset($parameters[0])) {
+                $schema[$type === 'string' ? 'minLength' : 'minimum'] = (int) $parameters[0];
+                $schema[$type === 'string' ? 'maxLength' : 'maximum'] = (int) $parameters[0];
+            }
+
+            if (in_array($name, ['in', 'not_in'], true) && $parameters !== []) {
+                $schema['enum'] = $parameters;
+            }
+        }
+
+        return $schema;
+    }
+
+    /**
+     * @param  array<int, string>  $rules
+     */
+    private function fieldType(array $rules): string
+    {
+        if ($this->hasAnyRule($rules, ['integer'])) {
+            return 'integer';
+        }
+
+        if ($this->hasAnyRule($rules, ['numeric', 'decimal'])) {
+            return 'number';
+        }
+
+        if ($this->hasAnyRule($rules, ['boolean', 'accepted', 'declined'])) {
+            return 'boolean';
+        }
+
+        if ($this->hasAnyRule($rules, ['array', 'list'])) {
+            return 'array';
+        }
+
+        if ($this->hasAnyRule($rules, ['file', 'image'])) {
+            return 'string';
+        }
+
+        return 'string';
+    }
+
+    /**
+     * @param  array<int, string>  $rules
+     */
+    private function hasRule(array $rules, string $expected): bool
+    {
+        return $this->hasAnyRule($rules, [$expected]);
+    }
+
+    /**
+     * @param  array<int, string>  $rules
+     * @param  array<int, string>  $expected
+     */
+    private function hasAnyRule(array $rules, array $expected): bool
+    {
+        return $this->firstMatchingRule($rules, $expected) !== null;
+    }
+
+    /**
+     * @param  array<int, string>  $rules
+     * @param  array<int, string>  $expected
+     */
+    private function firstMatchingRule(array $rules, array $expected): ?string
+    {
+        foreach ($rules as $rule) {
+            [$name] = $this->parseRule($rule);
+
+            if (in_array($name, $expected, true)) {
+                return $name;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{0: string, 1: array<int, string>}
+     */
+    private function parseRule(string $rule): array
+    {
+        [$name, $parameters] = array_pad(explode(':', $rule, 2), 2, '');
+
+        return [
+            Str::lower($name),
+            $parameters === '' ? [] : explode(',', $parameters),
+        ];
     }
 
     private function resourceSummary(string $action, string $resource): string

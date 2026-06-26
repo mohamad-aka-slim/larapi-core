@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
@@ -77,6 +78,31 @@ class ApiDocumentationTest extends TestCase
             ->assertJsonPath('paths./v1/users/{user}.delete.operationId', 'usersDestroy');
     }
 
+    public function test_openapi_json_builds_request_body_schema_from_form_request_rules(): void
+    {
+        Route::apiResource('api/v1/users', DocumentationProbeUserController::class);
+
+        $this->getJson('/api/docs/openapi.json')
+            ->assertOk()
+            ->assertJsonPath('paths./v1/users.post.requestBody.content.application/json.schema.$ref', '#/components/schemas/DocumentationProbeUserRequest')
+            ->assertJsonPath('paths./v1/users/{user}.put.requestBody.content.application/json.schema.$ref', '#/components/schemas/DocumentationProbeUserRequest')
+            ->assertJsonPath('paths./v1/users/{user}.patch.requestBody.content.application/json.schema.$ref', '#/components/schemas/DocumentationProbeUserRequest')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.required.0', 'name')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.required.1', 'email')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.required.2', 'role')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.required.3', 'password')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.required.4', 'password_confirmation')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.name.type', 'string')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.name.maxLength', 255)
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.email.format', 'email')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.age.type.0', 'integer')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.age.type.1', 'null')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.age.minimum', 18)
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.role.enum.0', 'admin')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.role.enum.1', 'user')
+            ->assertJsonPath('components.schemas.DocumentationProbeUserRequest.properties.password.format', 'password');
+    }
+
     public function test_api_docs_command_generates_json_file(): void
     {
         $files = new Filesystem;
@@ -100,11 +126,25 @@ class DocumentationProbeUserController
 {
     public function index(): void {}
 
-    public function store(): void {}
+    public function store(DocumentationProbeUserRequest $request): void {}
 
     public function show(): void {}
 
-    public function update(): void {}
+    public function update(DocumentationProbeUserRequest $request): void {}
 
     public function destroy(): void {}
+}
+
+class DocumentationProbeUserRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:255'],
+            'email' => 'required|email|max:255',
+            'age' => ['nullable', 'integer', 'min:18'],
+            'role' => ['required', 'in:admin,user'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ];
+    }
 }

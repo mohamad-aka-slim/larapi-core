@@ -117,6 +117,20 @@ Route::apiResource('v1/users', UserController::class);
 
 will add Swagger path operations for `/v1/users` and `/v1/users/{user}`.
 
+For better Swagger UI request forms on `POST`, `PUT`, and `PATCH`, type-hint a Laravel `FormRequest` on your controller actions. Larapi Core reads the request `rules()` and converts common validation rules into OpenAPI fields:
+
+```php
+public function store(UserRequest $request): JsonResponse
+{
+    // ...
+}
+
+public function update(UserRequest $request, User $user): JsonResponse
+{
+    // ...
+}
+```
+
 ## Response Envelope
 
 Success:
