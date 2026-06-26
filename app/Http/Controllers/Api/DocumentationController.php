@@ -12,7 +12,7 @@ class DocumentationController extends Controller
     public function ui(): Response
     {
         $title = e(config('api.name', config('app.name', 'Larapi')).' API Documentation');
-        $jsonUrl = e(url(trim((string) config('api.prefix', 'api'), '/').'/'.trim((string) config('api.documentation.json_path', 'docs/openapi.json'), '/')));
+        $jsonUrl = e('/'.trim((string) config('api.prefix', 'api'), '/').'/'.trim((string) config('api.documentation.json_path', 'docs/openapi.json'), '/'));
         $assetsUrl = e(rtrim((string) config('api.documentation.swagger_ui_assets_url'), '/'));
 
         $html = <<<HTML

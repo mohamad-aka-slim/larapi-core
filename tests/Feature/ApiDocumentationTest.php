@@ -54,6 +54,15 @@ class ApiDocumentationTest extends TestCase
             ->assertSee('/api/docs/openapi.json', false);
     }
 
+    public function test_root_swagger_ui_endpoint_does_not_start_database_sessions(): void
+    {
+        config(['session.driver' => 'database']);
+
+        $this->get('/docs')
+            ->assertOk()
+            ->assertSee('SwaggerUIBundle', false);
+    }
+
     public function test_openapi_json_includes_api_resource_routes_from_route_table(): void
     {
         Route::apiResource('api/v1/users', DocumentationProbeUserController::class);
