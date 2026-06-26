@@ -2,10 +2,21 @@
 
 namespace App\Support;
 
+use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 
 class OpenApiSpecification
 {
+    private const RESOURCE_ACTIONS = [
+        'index',
+        'store',
+        'show',
+        'update',
+        'destroy',
+    ];
+
     /**
      * @return array<string, mixed>
      */
@@ -15,6 +26,7 @@ class OpenApiSpecification
         $version = trim((string) config('api.version', 'v1'), '/');
         $basePath = $prefix === '' ? '' : '/'.$prefix;
         $serverUrl = rtrim((string) config('app.url', 'http://localhost'), '/').$basePath;
+        $resourceRoutes = $this->resourceRouteDocumentation($prefix);
 
         $specification = [
             'openapi' => '3.1.0',
@@ -41,8 +53,9 @@ class OpenApiSpecification
                     'name' => 'Authentication',
                     'description' => 'Sanctum bearer token authentication.',
                 ],
+                ...$resourceRoutes['tags'],
             ],
-            'paths' => $this->paths($version),
+            'paths' => array_replace_recursive($this->paths($version), $resourceRoutes['paths']),
             'components' => $this->components(),
         ];
 
@@ -206,6 +219,212 @@ class OpenApiSpecification
     }
 
     /**
+     * @return array{
+     *     tags: array<int, array{name: string, description: string}>,
+     *     paths: array<string, mixed>
+     * }
+     */
+    private function resourceRouteDocumentation(string $apiPrefix): array
+    {
+        $tags = [];
+        $paths = [];
+
+        foreach (Route::getRoutes() as $route) {
+            $action = $this->routeAction($route);
+
+            if (! in_array($action, self::RESOURCE_ACTIONS, true)) {
+                continue;
+            }
+
+            $path = $this->routePath($route, $apiPrefix);
+
+            if ($path === null) {
+                continue;
+            }
+
+            $resource = $this->resourceNameFromPath($path);
+            $tag = Str::headline($resource);
+            $tags[$tag] = [
+                'name' => $tag,
+                'description' => "{$tag} resource endpoints.",
+            ];
+
+            foreach ($this->httpMethods($route) as $method) {
+                $paths[$path][$method] = $this->resourceOperation($route, $method, $action, $resource, $tag);
+            }
+        }
+
+        return [
+            'tags' => array_values($tags),
+            'paths' => $paths,
+        ];
+    }
+
+    private function routeAction(LaravelRoute $route): ?string
+    {
+        $controller = $route->getAction('controller');
+
+        if (! is_string($controller) || ! str_contains($controller, '@')) {
+            return null;
+        }
+
+        return Str::afterLast($controller, '@');
+    }
+
+    private function routePath(LaravelRoute $route, string $apiPrefix): ?string
+    {
+        $uri = trim($route->uri(), '/');
+
+        if ($apiPrefix !== '') {
+            if (! Str::startsWith($uri, $apiPrefix.'/')) {
+                return null;
+            }
+
+            $uri = Str::after($uri, $apiPrefix.'/');
+        }
+
+        $path = preg_replace('/\{([^}]+)\?\}/', '{$1}', $uri) ?: $uri;
+
+        return '/'.trim($path, '/');
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function httpMethods(LaravelRoute $route): array
+    {
+        return collect($route->methods())
+            ->map(fn (string $method): string => Str::lower($method))
+            ->reject(fn (string $method): bool => in_array($method, ['head', 'options'], true))
+            ->values()
+            ->all();
+    }
+
+    private function resourceNameFromPath(string $path): string
+    {
+        return collect(explode('/', trim($path, '/')))
+            ->reject(fn (string $segment): bool => str_starts_with($segment, '{'))
+            ->last() ?? 'resource';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resourceOperation(LaravelRoute $route, string $method, string $action, string $resource, string $tag): array
+    {
+        $operation = [
+            'tags' => [$tag],
+            'summary' => $this->resourceSummary($action, $resource),
+            'operationId' => Str::camel($resource.'_'.$action),
+            'parameters' => $this->pathParameters($route),
+            'responses' => $this->resourceResponses($action),
+        ];
+
+        if (in_array($method, ['post', 'put', 'patch'], true)) {
+            $operation['requestBody'] = [
+                'required' => true,
+                'content' => [
+                    'application/json' => [
+                        'schema' => [
+                            'type' => 'object',
+                            'additionalProperties' => true,
+                        ],
+                    ],
+                ],
+            ];
+        }
+
+        if ($this->usesBearerAuthentication($route)) {
+            $operation['security'] = [
+                [
+                    'sanctum' => [],
+                ],
+            ];
+        }
+
+        return $operation;
+    }
+
+    private function resourceSummary(string $action, string $resource): string
+    {
+        $label = Str::headline($resource);
+        $singular = Str::singular($label);
+
+        return match ($action) {
+            'index' => "List {$label}",
+            'store' => "Create {$singular}",
+            'show' => "Get {$singular}",
+            'update' => "Update {$singular}",
+            'destroy' => "Delete {$singular}",
+            default => Str::headline($action.' '.$resource),
+        };
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function pathParameters(LaravelRoute $route): array
+    {
+        preg_match_all('/\{([^}]+)\??\}/', $route->uri(), $matches);
+
+        return collect($matches[1] ?? [])
+            ->map(fn (string $parameter): array => [
+                'name' => $parameter,
+                'in' => 'path',
+                'required' => true,
+                'schema' => [
+                    'type' => 'string',
+                ],
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resourceResponses(string $action): array
+    {
+        if ($action === 'destroy') {
+            return [
+                '204' => [
+                    'description' => 'Resource deleted successfully.',
+                ],
+                '404' => [
+                    '$ref' => '#/components/responses/NotFound',
+                ],
+            ];
+        }
+
+        return [
+            in_array($action, ['store'], true) ? '201' : '200' => [
+                'description' => 'Successful response.',
+                'content' => [
+                    'application/json' => [
+                        'schema' => [
+                            '$ref' => $action === 'index'
+                                ? '#/components/schemas/GenericCollectionResponse'
+                                : '#/components/schemas/GenericResourceResponse',
+                        ],
+                    ],
+                ],
+            ],
+            '404' => [
+                '$ref' => '#/components/responses/NotFound',
+            ],
+            '422' => [
+                '$ref' => '#/components/responses/ValidationError',
+            ],
+        ];
+    }
+
+    private function usesBearerAuthentication(LaravelRoute $route): bool
+    {
+        return collect($route->gatherMiddleware())
+            ->contains(fn (string $middleware): bool => Str::startsWith($middleware, ['auth', 'auth:']));
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function components(): array
@@ -231,6 +450,16 @@ class OpenApiSpecification
                 ],
                 'Unauthorized' => [
                     'description' => 'Authentication token is missing or invalid.',
+                    'content' => [
+                        'application/json' => [
+                            'schema' => [
+                                '$ref' => '#/components/schemas/ErrorResponse',
+                            ],
+                        ],
+                    ],
+                ],
+                'NotFound' => [
+                    'description' => 'Resource was not found.',
                     'content' => [
                         'application/json' => [
                             'schema' => [
@@ -267,6 +496,17 @@ class OpenApiSpecification
                 'EmptySuccessResponse' => $this->successEnvelope([
                     'type' => 'object',
                 ], 'Logged out successfully.'),
+                'GenericCollectionResponse' => $this->successEnvelope([
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'additionalProperties' => true,
+                    ],
+                ], 'Operation completed successfully.'),
+                'GenericResourceResponse' => $this->successEnvelope([
+                    'type' => 'object',
+                    'additionalProperties' => true,
+                ], 'Operation completed successfully.'),
                 'AuthPayload' => [
                     'type' => 'object',
                     'required' => ['token', 'token_type', 'user'],

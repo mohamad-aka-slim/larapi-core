@@ -63,6 +63,7 @@ CACHE_STORE=file
 | POST | `/api/v1/auth/login` | No | Authenticate and receive token |
 | POST | `/api/v1/auth/logout` | Bearer | Revoke current token |
 | GET | `/api/v1/auth/me` | Bearer | Get authenticated user |
+| GET | `/docs` | No | Swagger UI API documentation |
 | GET | `/api/docs` | No | Swagger UI API documentation |
 | GET | `/api/docs/openapi.json` | No | OpenAPI JSON specification |
 | GET | `/api/docs/openapi.yaml` | No | OpenAPI YAML specification |
@@ -78,8 +79,10 @@ php artisan serve
 Open the interactive docs at:
 
 ```txt
-http://localhost:8000/api/docs
+http://localhost:8000/docs
 ```
+
+The API-prefixed documentation URL is also available at `http://localhost:8000/api/docs`.
 
 Generate a static specification file:
 
@@ -102,6 +105,14 @@ API_DOCS_CONTACT_EMAIL=api@example.com
 ```
 
 Add custom endpoint documentation by merging OpenAPI fragments through `api.documentation.extensions` in `config/api.php`.
+
+API resource routes are discovered automatically from Laravel's route table. For example:
+
+```php
+Route::apiResource('v1/users', UserController::class);
+```
+
+will add Swagger path operations for `/v1/users` and `/v1/users/{user}`.
 
 ## Response Envelope
 

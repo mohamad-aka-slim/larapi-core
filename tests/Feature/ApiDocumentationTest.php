@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
 class ApiDocumentationTest extends TestCase
@@ -35,6 +36,28 @@ class ApiDocumentationTest extends TestCase
             ->assertSee('/api/docs/openapi.json', false);
     }
 
+    public function test_root_swagger_ui_endpoint_loads_interactive_documentation(): void
+    {
+        $this->get('/docs')
+            ->assertOk()
+            ->assertSee('SwaggerUIBundle', false)
+            ->assertSee('/api/docs/openapi.json', false);
+    }
+
+    public function test_openapi_json_includes_api_resource_routes_from_route_table(): void
+    {
+        Route::apiResource('api/v1/users', DocumentationProbeUserController::class);
+
+        $this->getJson('/api/docs/openapi.json')
+            ->assertOk()
+            ->assertJsonPath('paths./v1/users.get.operationId', 'usersIndex')
+            ->assertJsonPath('paths./v1/users.post.operationId', 'usersStore')
+            ->assertJsonPath('paths./v1/users/{user}.get.operationId', 'usersShow')
+            ->assertJsonPath('paths./v1/users/{user}.put.operationId', 'usersUpdate')
+            ->assertJsonPath('paths./v1/users/{user}.patch.operationId', 'usersUpdate')
+            ->assertJsonPath('paths./v1/users/{user}.delete.operationId', 'usersDestroy');
+    }
+
     public function test_api_docs_command_generates_json_file(): void
     {
         $files = new Filesystem;
@@ -52,4 +75,17 @@ class ApiDocumentationTest extends TestCase
 
         $files->delete($path);
     }
+}
+
+class DocumentationProbeUserController
+{
+    public function index(): void {}
+
+    public function store(): void {}
+
+    public function show(): void {}
+
+    public function update(): void {}
+
+    public function destroy(): void {}
 }
